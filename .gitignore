@@ -1,3 +1,6 @@
+# Ignore my private login key
+private_key.pem
+
 # Compiled class file
 *.class
 
