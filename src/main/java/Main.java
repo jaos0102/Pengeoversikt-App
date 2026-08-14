@@ -1,5 +1,9 @@
 import com.auth0.jwt.JWT;
 import com.auth0.jwt.algorithms.Algorithm;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ArrayNode;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 
 import java.net.URI;
 import java.net.http.HttpClient;
@@ -12,9 +16,6 @@ import java.security.interfaces.RSAPrivateKey;
 import java.security.spec.PKCS8EncodedKeySpec;
 import java.time.Instant;
 import java.util.Base64;
-
-import java.nio.file.Files;
-import java.nio.file.Paths;
 
 public class Main {
 
@@ -35,28 +36,74 @@ public class Main {
                     .withExpiresAt(Instant.ofEpochSecond(now + 3600))
                     .sign(algorithm);
 
+            String dateFrom = "2026-01-01";
+            String baseUrl = "https://api.enablebanking.com/accounts/" + ACCOUNT_UID + "/transactions?date_from=" + dateFrom;
+            
             HttpClient client = HttpClient.newHttpClient();
-            HttpRequest request = HttpRequest.newBuilder()
-                    .uri(URI.create("https://api.enablebanking.com/accounts/" + ACCOUNT_UID + "/transactions"))
-                    .header("Authorization", "Bearer " + jwt)
-                    .GET()
-                    .build();
+            ObjectMapper mapper = new ObjectMapper();
+            
+            // Her skal vi samle opp alle transaksjonene fra alle sidene
+            ArrayNode allTransactions = mapper.createArrayNode();
+            String continuationKey = null;
+            int pageCounter = 1;
 
-            HttpResponse<String> response = client.send(request, HttpResponse.BodyHandlers.ofString());
+            System.out.println("--- STARTER HENTING AV TRANSAKSJONER FRA NORDEA ---");
 
-            System.out.println("--- RÅ DATA FRA NORDHÄ ---");
-            System.out.println(response.body());
+            // Løkken kjører så lenge vi har en continuationKey
+            do {
+                String url = baseUrl;
+                if (continuationKey != null && !continuationKey.isEmpty()) {
+                    // Legger til nøkkelen i URL-en for å hente neste side
+                    url += "&continuation_key=" + continuationKey;
+                }
 
-            if (response.statusCode() == 200) {
-                String jsonData = response.body();
+                System.out.println("Henter side " + pageCounter + "...");
+
+                HttpRequest request = HttpRequest.newBuilder()
+                        .uri(URI.create(url))
+                        .header("Authorization", "Bearer " + jwt)
+                        .GET()
+                        .build();
+
+                HttpResponse<String> response = client.send(request, HttpResponse.BodyHandlers.ofString());
+
+                if (response.statusCode() == 200) {
+                    JsonNode rootNode = mapper.readTree(response.body());
+                    
+                    // Trekk ut transaksjonene for denne siden og legg dem til i hovedlisten
+                    JsonNode transactions = rootNode.get("transactions");
+                    if (transactions != null && transactions.isArray()) {
+                        allTransactions.addAll((ArrayNode) transactions);
+                    }
+
+                    // Se etter ny continuation_key for neste runde
+                    JsonNode contKeyNode = rootNode.get("continuation_key");
+                    if (contKeyNode != null && !contKeyNode.isNull() && !contKeyNode.asText().isEmpty()) {
+                        continuationKey = contKeyNode.asText();
+                    } else {
+                        // Ingen nøkkel = vi har nådd slutten!
+                        continuationKey = null; 
+                    }
+                } else {
+                    System.out.println("Feil ved henting av side " + pageCounter + " (Status " + response.statusCode() + "):");
+                    System.out.println(response.body());
+                    break; // Avbryter løkken ved feil
+                }
                 
-                // Lagrer dataen til en fil
-                Files.write(Paths.get("transactions.json"), jsonData.getBytes());
-                
-                System.out.println("Data er nå lagret i filen: transactions.json");
-            } else {
-                System.out.println("Feil ved henting: " + response.statusCode());
-            }
+                pageCounter++;
+
+            } while (continuationKey != null);
+
+            // Til slutt: Lagre alle innsamlede transaksjoner til filen
+            ObjectNode finalJson = mapper.createObjectNode();
+            finalJson.set("transactions", allTransactions);
+            
+            // Bruker .writerWithDefaultPrettyPrinter() for at JSON-filen skal bli pen og lesbar
+            String finalJsonString = mapper.writerWithDefaultPrettyPrinter().writeValueAsString(finalJson);
+            Files.write(Paths.get("transactions.json"), finalJsonString.getBytes());
+            
+            System.out.println("\nSuksess! Hentet totalt " + allTransactions.size() + " transaksjoner.");
+            System.out.println("All data er nå samlet og lagret i filen: transactions.json");
 
         } catch (Exception e) {
             e.printStackTrace();

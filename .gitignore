@@ -1,5 +1,8 @@
-# Ignore my private login key
+# My private login key
 private_key.pem
+
+# My transactions
+transactions.json
 
 # Compiled class file
 *.class
