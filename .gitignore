@@ -2,7 +2,7 @@
 private_key.pem
 
 # My transactions
-transactions.json
+transactions*.json
 
 # Compiled class file
 *.class
